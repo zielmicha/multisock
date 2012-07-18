@@ -48,7 +48,7 @@ class Test(unittest.TestCase):
                 ch = sock.get_main_channel()
                 ch.recv.bind(ch.send_async)
             
-            acceptor.bind(accepted)
+            acceptor.accept.bind(accepted)
 
             client = self.thread.connect(addr)
 
@@ -71,7 +71,7 @@ class Test(unittest.TestCase):
 
             def server():
                 for i in xrange(4):
-                    client = acceptor().get_main_channel()
+                    client = acceptor.accept().get_main_channel()
                     data = client.recv()
                     client.send_async(data)
                 
@@ -97,7 +97,7 @@ class Test(unittest.TestCase):
                     ch.send_async(str(new_channel.id))
                     new_channel.recv.bind(functools.partial(lambda c, a: c.send_async(a), new_channel))
             
-            acceptor.bind(accepted)
+            acceptor.accept.bind(accepted)
 
             client = self.thread.connect(addr)
 
@@ -118,7 +118,7 @@ class Test(unittest.TestCase):
         addr = 'tcp:localhost:5902'
         acceptor = self.thread.listen(addr)
         client = self.thread.connect(addr)
-        server = acceptor()
+        server = acceptor.accept()
 
         client_ch = multisock.RpcChannel(client.get_main_channel())
         server_ch = multisock.RpcChannel(server.get_main_channel())
@@ -139,7 +139,7 @@ class Test(unittest.TestCase):
         addr = 'tcp:localhost:5901'
         acceptor = self.thread.listen(addr)
         client = self.thread.connect(addr)
-        server = acceptor()
+        server = acceptor.accept()
         assert client.get_main_channel() is client.get_main_channel()
 
         assert client.new_channel().id != server.new_channel().id

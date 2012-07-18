@@ -83,6 +83,7 @@ class SocketThread(object):
         self.polled_read_sockets = []
         self.polled_accept_sockets = []
         self.data_to_write = collections.defaultdict(collections.deque)
+        self.socket_objects = {}
         self.on_receive = {}
         
         self._interrupt_pipe_r, self._interrupt_pipe_w = os.pipe()
@@ -97,7 +98,7 @@ class SocketThread(object):
             self.local.in_socket_thread = False
 
     def _setup(self):
-        set_thread_name('multisock select')
+        set_thread_name('multisockselect')
         self.local.in_socket_thread = True
         
     def _tick(self):
@@ -115,8 +116,10 @@ class SocketThread(object):
         polled_read_sockets.append(self._interrupt_pipe_r)
 
         #print 'select', polled_read_sockets + polled_accept_sockets, polled_write_sockets
-        readable_sockets, writable_sockets, _ = select.select(polled_read_sockets + polled_accept_sockets, polled_write_sockets, [])
-        #print '----->', readable_sockets, writable_sockets
+        readable_sockets, writable_sockets, error_sockets = select.select(polled_read_sockets + polled_accept_sockets,
+                                                                          polled_write_sockets,
+                                                                          polled_read_sockets + polled_accept_sockets + polled_write_sockets)
+        #print '----->', readable_sockets, writable_sockets, error_sockets
         
         # even if select was not interrupted by writing to pipe, next select will use
         # new data (see first comment)
@@ -129,6 +132,9 @@ class SocketThread(object):
             except socket.error: # TODO: check EAGAIN
                 return 0
         
+        for sock in error_sockets:
+            self.socket_objects[sock].close()
+
         for sock in writable_sockets:
             deque = self.data_to_write[sock]
             while deque: # other threads never pop, so we don't need to lock
@@ -145,7 +151,10 @@ class SocketThread(object):
                 os.read(self._interrupt_pipe_r, 1)
             else:
                 data = sock.recv(4096)
-                self.on_receive[sock](data)
+                if not data:
+                    self.socket_objects[sock].close()
+                else:
+                    self.on_receive[sock](data)
 
     def _write_async(self, socket, data):
         with self.main_lock:
@@ -176,12 +185,8 @@ class SocketThread(object):
         sock.bind(addr)
         sock.listen(1)
 
-        acceptor = Operation()
-        with self.main_lock:
-            self.polled_accept_sockets.append(sock)
-            self.on_receive[sock] = lambda (sock, addr): acceptor.dispatch(Socket(self, sock, is_client=False))
-            self._interrupt_select()
-
+        acceptor = Acceptor(self, sock)
+        self.socket_objects[sock] = acceptor
         return acceptor
 
     def start(self):
@@ -189,14 +194,32 @@ class SocketThread(object):
         self.thread.daemon = True
         self.thread.start()
 
+class Acceptor(object):
+    def __init__(self, thread, socket):
+        self._socket = socket
+        self.accept = Operation()
+        self._thread = thread
+        with self._thread.main_lock:
+            self._thread.polled_accept_sockets.append(self._socket)
+            self._thread.on_receive[self._socket] = \
+                lambda (sock, addr): self.accept.dispatch(Socket(self._thread, sock, is_client=False))
+            self._thread._interrupt_select()
+
+    def close(self):
+        with self._thread.main_lock:
+            del self._thread.socket_objects[self._socket]
+            self._thread.polled_accept_sockets.remove(self._socket)
+        self._socket.close()
+        
 class Socket(object):
     def __init__(self, thread, sock, is_client):
         self._thread = thread
-        self._sock = sock
+        self._socket = sock
         with self._thread.main_lock:
-            self._thread.on_receive[self._sock] = self._received
-            self._thread.polled_read_sockets.append(self._sock)
+            self._thread.on_receive[self._socket] = self._received
+            self._thread.polled_read_sockets.append(self._socket)
             self._thread._interrupt_select()
+            self._thread.socket_objects[self._socket] = self
 
         self._buffer_list = collections.deque()
         self._buffer_len = 0
@@ -204,9 +227,9 @@ class Socket(object):
         self._channels = {}
         self._next_channel_id = 1
         self._is_client = is_client
-
+    
     def _write_async(self, data):
-        self._thread._write_async(self._sock, data)
+        self._thread._write_async(self._socket, data)
 
     def _received(self, data):
         self._buffer_len += len(data)
@@ -265,6 +288,16 @@ class Socket(object):
         assert id < MAX_ID
         msb = MSB_CLIENT if self._is_client else MSB_SERVER
         return self.get_channel(msb | id)
+
+    def close(self):
+        self._socket.close()
+        with self._thread.main_lock:
+            self._thread.polled_read_sockets.remove(self._socket)
+            del self._thread.socket_objects[self._socket]
+            try:
+                del self._thread.data_to_write[self._socket]
+            except KeyError:
+                pass
 
 class Channel(object):
     def __init__(self, socket, id):
@@ -360,7 +393,22 @@ def async(method):
     t.daemon = True
     t.start()
     return t
-    
+
+def listen(*args, **kwargs):
+    return get_global_thread().listen(*args, **kwargs)
+
+def connect(*args, **kwargs):
+    return get_global_thread().connect(*args, **kwargs)
+
+_global_thread = None
+
+def get_global_thread():
+    global _global_thread
+    if not _global_thread:
+        _global_thread = SocketThread()
+        _global_thread.start()
+    return _global_thread
+
 try:
     import ctypes
 
