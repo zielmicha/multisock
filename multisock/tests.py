@@ -28,6 +28,7 @@
 import unittest
 
 import multisock
+import socket
 import functools
 
 class Test(unittest.TestCase):
@@ -134,7 +135,7 @@ class Test(unittest.TestCase):
             client_ch.rpc_send(msg).bind(functools.partial(check, msg))
 
         assert client_ch.rpc_send('hello')() == 'hello'
-                
+
     def test_misc(self):
         addr = 'tcp:localhost:5901'
         acceptor = self.thread.listen(addr)
@@ -150,6 +151,20 @@ class Test(unittest.TestCase):
             assert new - last == 1
             last = new
         
+    def test_close(self):
+        addr = 'tcp:localhost:5904'
+        acceptor = self.thread.listen(addr)
+        acceptor.close()
+
+        acceptor = self.thread.listen(addr)
+        self.assertRaises(socket.error, self.thread.listen, addr)
+        client = self.thread.connect(addr)
+        client_ch = client.get_main_channel()
+        server = acceptor.accept()
+
+        server.close()
+        for i in xrange(20):
+            self.assertRaises(multisock.SocketClosedError, client_ch.recv)
 
 if __name__ == '__main__':
     unittest.main()

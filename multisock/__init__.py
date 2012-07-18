@@ -213,6 +213,7 @@ class Acceptor(object):
         
 class Socket(object):
     def __init__(self, thread, sock, is_client):
+        self.closed = False
         self._thread = thread
         self._socket = sock
         with self._thread.main_lock:
@@ -227,8 +228,9 @@ class Socket(object):
         self._channels = {}
         self._next_channel_id = 1
         self._is_client = is_client
-    
+
     def _write_async(self, data):
+        self.check_not_closed()
         self._thread._write_async(self._socket, data)
 
     def _received(self, data):
@@ -289,7 +291,12 @@ class Socket(object):
         msb = MSB_CLIENT if self._is_client else MSB_SERVER
         return self.get_channel(msb | id)
 
+    def check_not_closed(self):
+        if self.closed:
+            raise SocketClosedError('socket is closed')
+
     def close(self):
+        self.closed = True
         self._socket.close()
         with self._thread.main_lock:
             self._thread.polled_read_sockets.remove(self._socket)
@@ -299,6 +306,12 @@ class Socket(object):
             except KeyError:
                 pass
 
+        for channel in self._channels.values():
+            channel._closed()
+
+class SocketClosedError(socket.error):
+    pass
+
 class Channel(object):
     def __init__(self, socket, id):
         self.socket = socket
@@ -307,6 +320,9 @@ class Channel(object):
 
     def _received(self, data):
         self.recv.dispatch(data)
+
+    def _closed(self):
+        self.recv.close()
 
     def send_async(self, data):
         header = struct.pack(UINT32_STRUCT, len(data) + UINT32_SIZE) + struct.pack(UINT32_STRUCT, self.id)
@@ -355,9 +371,13 @@ class RpcChannel(object):
 class Operation(object):
     def __init__(self):
         self._callback = None
+        self._closed = False
         self._queue = queue.Queue(0)
+        # value that is passed to queue when Operation is closed
+        self._special_close_value = object()
 
     def dispatch(self, data):
+        self._check_closed()
         if self._callback:
             self._callback(data)
         else:
@@ -366,14 +386,33 @@ class Operation(object):
     def bind(self, func):
         self._callback = func
 
+    def _check_closed(self):
+        if self._closed:
+            raise SocketClosedError('socket is closed')
+
+    def _check_close_val(self, val):
+        if val is self._special_close_value:
+            raise SocketClosedError('socket is closed')
+        else:
+            return val
+
+    def close(self):
+        # FIXME: this doesn't work reliably when more than 10 threads is
+        # waiting on queue
+        self._closed = True
+        for i in xrange(10):
+            self._queue.put(self._special_close_value)
+
     def __call__(self):
         assert not self._callback
-        return self._queue.get()
+        self._check_closed()
+        return self._check_close_val(self._queue.get())
 
     def noblock(self):
         assert not self._callback
+        self._check_closed()
         try:
-            return self._queue.get_nowait()
+            return self._check_close_val(self._queue.get_nowait())
         except queue.Empty:
             raise Operation.WouldBlock()
 
