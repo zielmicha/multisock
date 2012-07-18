@@ -114,6 +114,27 @@ class Test(unittest.TestCase):
                 channel = client.get_channel(channel_id)
                 test_echo(channel, i)
 
+    def test_rpc(self):
+        addr = 'tcp:localhost:5902'
+        acceptor = self.thread.listen(addr)
+        client = self.thread.connect(addr)
+        server = acceptor()
+
+        client_ch = multisock.RpcChannel(client.get_main_channel())
+        server_ch = multisock.RpcChannel(server.get_main_channel())
+
+        def echo_rpc((data, return_)):
+            return_(data)
+        
+        server_ch.rpc_recv.bind(echo_rpc)
+        for i in xrange(10):
+            msg = str(i)
+            def check(a, b):
+                assert a == b
+            client_ch.rpc_send(msg).bind(functools.partial(check, msg))
+
+        assert client_ch.rpc_send('hello')() == 'hello'
+                
     def test_misc(self):
         addr = 'tcp:localhost:5901'
         acceptor = self.thread.listen(addr)

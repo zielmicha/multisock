@@ -37,6 +37,11 @@ class Channel:
     send_async(data -> str)
     recv -> Operation
 
+class RpcChannel
+    rpc_send(data -> str) -> Operation
+    rpc_recv -> Operation -- operation returns function that should be
+        called with response - this functions is async
+
 class Operation:
     __call__() -> T
     noblock() -> T
@@ -265,7 +270,6 @@ class Channel(object):
     def __init__(self, socket, id):
         self.socket = socket
         self.id = id
-
         self.recv = Operation()
 
     def _received(self, data):
@@ -275,6 +279,46 @@ class Channel(object):
         header = struct.pack(UINT32_STRUCT, len(data) + UINT32_SIZE) + struct.pack(UINT32_STRUCT, self.id)
         self.socket._write_async(header + data)
 
+RPC_REQUEST = 0x10000000
+RPC_RESPONSE = 0x20000000
+RPC_NUM_MASK = 0x0FFFFFFF
+
+class RpcChannel(object):
+    def __init__(self, channel):
+        self._rpc_num = 0
+        self.channel = channel
+        self.channel.recv.bind(self._received)
+        self.rpc_recv = Operation()
+        self._operations = {}
+
+    def _received(self, packet):
+        flags_num, = struct.unpack(UINT32_STRUCT, packet[:UINT32_SIZE])
+        num = RPC_NUM_MASK & flags_num
+        data = packet[UINT32_SIZE:]
+        if RPC_REQUEST & flags_num:
+            def func(data):
+                self._send(num | RPC_RESPONSE, data)
+            
+            self.rpc_recv.dispatch((data, func))
+        elif RPC_RESPONSE & flags_num:
+            # TODO: signal error if num not in _operations
+            self._operations[num].dispatch(data)
+        else:
+            # TODO: signal error
+            print 'Error: invalid flag'
+        
+    def rpc_send(self, data):
+        self._rpc_num += 1
+        num = self._rpc_num
+        self._send(num | RPC_REQUEST, data)
+        operation = Operation()
+        self._operations[num] = operation
+        return operation
+
+    def _send(self, num, data):
+        header = struct.pack(UINT32_STRUCT, num)
+        self.channel.send_async(header + data)
+        
 class Operation(object):
     def __init__(self):
         self._callback = None
