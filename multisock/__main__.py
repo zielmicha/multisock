@@ -25,3 +25,14 @@ assert channel.recv() == 'hello world!'
 
 channel.send_async('123!')
 print channel.recv()
+
+start = time.time()
+times = 4000
+for i in xrange(times):
+    channel.send_async('aa')
+    channel.recv()
+length = time.time() - start
+
+print 'latency %.2f ms' % (length / times * 1000)
+
+t.thread.join()

@@ -81,13 +81,15 @@ class SocketThread(object):
         
         polled_read_sockets.append(self._interrupt_pipe_r)
 
+        #print 'select', polled_read_sockets + polled_accept_sockets, polled_write_sockets
         readable_sockets, writable_sockets, _ = select.select(polled_read_sockets + polled_accept_sockets, polled_write_sockets, [])
-
+        #print '----->', readable_sockets, writable_sockets
+        
         # even if select was not interrupted by writing to pipe, next select will use
         # new data (see first comment)
         with self.main_lock:
             self._interrupted = True
-        
+            
         def _send_nonblock(sock, data):
             try:
                 return sock.send(data)
@@ -107,7 +109,7 @@ class SocketThread(object):
             if sock in self.polled_accept_sockets:
                 self.on_receive[sock](sock.accept())
             elif sock == self._interrupt_pipe_r:
-                pass
+                os.read(self._interrupt_pipe_r, 1)
             else:
                 data = sock.recv(4096)
                 self.on_receive[sock](data)
