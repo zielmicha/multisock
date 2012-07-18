@@ -28,6 +28,7 @@
 import unittest
 
 import multisock
+import functools
 
 class Test(unittest.TestCase):
     def setUp(self):
@@ -35,8 +36,12 @@ class Test(unittest.TestCase):
         self.thread.start()
 
     def test_handlers(self):
+        self._test_data(6, 'hello')
+        self._test_data(8, 'hello' * 7000)
+
+    def _test_data(self, portprefix, s):
         for i in xrange(10):
-            addr = 'tcp:localhost:56%02d' % i
+            addr = 'tcp:localhost:5%d%02d' % (portprefix, i)
             acceptor = self.thread.listen(addr)
 
             def accepted(sock):
@@ -47,15 +52,17 @@ class Test(unittest.TestCase):
 
             client = self.thread.connect(addr)
 
-            def send(channel):
-                channel.send_async('hello')
-                channel.recv.bind(lambda data: recv(channel, data))
+            def send(channel, expdata):
+                channel.send_async(expdata)
+                channel.recv.bind(lambda data: recv(channel, data, expdata))
             
-            def recv(channel, data):
-                assert data == 'hello', repr(data)
-            
+            def recv(channel, data, expdata):
+                assert data == expdata, repr(data)
+
+            main = client.get_main_channel()
             for i in xrange(10):
-                send(client.get_main_channel())
+                send(main, 'hello')
+
             
     def test_threads(self):
         for i in xrange(10):
@@ -77,6 +84,51 @@ class Test(unittest.TestCase):
         
             for t in [ multisock.async(lambda: client(i)) for i in xrange(4) ]:
                 t.join()
+
+    def test_channels(self):
+        for i in xrange(10):
+            addr = 'tcp:localhost:57%02d' % i
+            acceptor = self.thread.listen(addr)
+
+            def accepted(sock):
+                ch = sock.get_main_channel()
+                new_channel = sock.new_channel()
+                for i in xrange(3):
+                    ch.send_async(str(new_channel.id))
+                    new_channel.recv.bind(functools.partial(lambda c, a: c.send_async(a), new_channel))
+            
+            acceptor.bind(accepted)
+
+            client = self.thread.connect(addr)
+
+            main = client.get_main_channel()
+
+            def test_echo(channel, i):
+                msg = str(i)
+                for i in xrange(5):
+                    channel.send_async(msg)
+                    assert channel.recv() == msg
+            
+            for i in xrange(3):
+                channel_id = int(main.recv())
+                channel = client.get_channel(channel_id)
+                test_echo(channel, i)
+
+    def test_misc(self):
+        addr = 'tcp:localhost:5901'
+        acceptor = self.thread.listen(addr)
+        client = self.thread.connect(addr)
+        server = acceptor()
+        assert client.get_main_channel() is client.get_main_channel()
+
+        assert client.new_channel().id != server.new_channel().id
+        
+        last = client.new_channel().id
+        for i in xrange(200):
+            new = client.new_channel().id
+            assert new - last == 1
+            last = new
+        
 
 if __name__ == '__main__':
     unittest.main()
