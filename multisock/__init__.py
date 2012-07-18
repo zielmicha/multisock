@@ -1,8 +1,36 @@
+# Copyright (c) 2012, Michal Zielinski <michal@zielinscy.org.pl>
+# All rights reserved.
+# 
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+# 
+#     * Redistributions of source code must retain the above copyright
+#     notice, this list of conditions and the following disclaimer.
+# 
+#     * Redistributions in binary form must reproduce the above
+#     copyright notice, this list of conditions and the following
+#     disclaimer in the documentation and/or other materials provided
+#     with the distribution.
+# 
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+# HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 '''
 class Socket:
     remote_address
     get_main_channel() -> Channel
     get_channel(id -> int) -> Channel
+    new_channel() -> Channel
     
 class Channel:
     send(data -> str)
@@ -139,6 +167,7 @@ class SocketThread(object):
     def listen(self, uri):
         addr = _parse_tcp_uri(uri)
         sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(addr)
         sock.listen(1)
 
@@ -146,6 +175,7 @@ class SocketThread(object):
         with self.main_lock:
             self.polled_accept_sockets.append(sock)
             self.on_receive[sock] = lambda (sock, addr): acceptor.dispatch(Socket(self, sock, is_client=False))
+            self._interrupt_select()
 
         return acceptor
 
@@ -161,6 +191,7 @@ class Socket(object):
         with self._thread.main_lock:
             self._thread.on_receive[self._sock] = self._received
             self._thread.polled_read_sockets.append(self._sock)
+            self._thread._interrupt_select()
 
         self._buffer_list = collections.deque()
         self._buffer_len = 0
@@ -211,21 +242,23 @@ class Socket(object):
     def _received_packet(self, packet):
         channel, = struct.unpack(UINT32_STRUCT, packet[UINT32_SIZE * 1: UINT32_SIZE * 2])
         data = packet[UINT32_SIZE * 2:]
-        self.get_channel_by_raw_id(channel)._received(data)
+        self.get_channel(channel)._received(data)
 
-    def get_channel_by_raw_id(self, id):
+    def get_channel(self, id):
         if id not in self._channels:
             self._channels[id] = Channel(self, id)
 
         return self._channels[id]
 
     def get_main_channel(self):
-        return self.get_channel_by_raw_id(MSB_SYSTEM | SYSTEM_MAIN)
+        return self.get_channel(MSB_SYSTEM | SYSTEM_MAIN)
     
-    def get_channel_by_id(self, id):
+    def new_channel(self):
+        id = self._next_channel_id
+        self._next_channel_id += 1
         assert id < MAX_ID
         msb = MSB_CLIENT if self._is_client else MSB_SERVER
-        return get_channel_by_raw_id(msb | id)
+        return self.get_channel(msb | id)
 
 class Channel(object):
     def __init__(self, socket, id):
@@ -262,7 +295,7 @@ class Operation(object):
     def noblock(self):
         assert not self._callback
         try:
-            return self._queue.get_noblock()
+            return self._queue.get_nowait()
         except queue.Empty:
             raise Operation.WouldBlock()
 
@@ -276,6 +309,13 @@ def _parse_tcp_uri(uri):
     else:
         raise ValueError('Not supported schema of %r' % uri)
 
+def async(method):
+    ' Simple helper method that starts new thread '
+    t = threading.Thread(target=method)
+    t.daemon = True
+    t.start()
+    return t
+    
 try:
     import ctypes
 
