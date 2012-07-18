@@ -229,14 +229,15 @@ class Socket(object):
                 break
             elif size_left < 0:
                 size_to_pushback = -size_left
-                self._buffer_list.appendleft(data[:-size_to_pushback])
-                buff.append(data[-size_to_pushback:])
+                self._buffer_list.appendleft(data[-size_to_pushback:])
+                buff.append(data[:-size_to_pushback])
                 break
             else:
                 buff.append(data)
 
         packet = ''.join(buff)
         self._buffer_len -= len(packet)
+        assert size + UINT32_SIZE == len(packet)
         return packet
 
     def _received_packet(self, packet):
