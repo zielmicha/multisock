@@ -211,5 +211,30 @@ class Test(unittest.TestCase):
         time.sleep(0.1)
         assert a.got_message, 'qsize: %d' % server.get_main_channel().recv._queue.qsize()
 
+    def test_sync_send(self):
+        addr = 'tcp:localhost:5909'
+        acceptor = self.thread.listen(addr)
+        acceptor.close()
+
+        acceptor = self.thread.listen(addr)
+        client = self.thread.connect(addr)
+        server = acceptor.accept()
+        
+        client_ch = client.get_main_channel()
+        server_ch = server.get_main_channel()
+
+        class A:
+            def set(self, _): self.got_message = True
+
+        a = A()
+        a.got_message = False
+
+        server_ch.recv.bind(a.set)
+        
+        client_ch.send('aaa')
+        time.sleep(0.1)
+        assert a.got_message
+        
+
 if __name__ == '__main__':
     unittest.main()

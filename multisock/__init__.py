@@ -34,6 +34,7 @@ class Socket:
     
 class Channel:
     send(data -> str)
+    send_op(data -> str) -> Operation
     send_async(data -> str)
     recv -> Operation
 
@@ -76,8 +77,6 @@ DEBUG = 0
 
 class SocketThread(object):
     def __init__(self):
-        # TODO: delete closed sockets
-        # TODO: handle socket close
         self.local = threading.local()
         self.local.in_socket_thread = False
         
@@ -157,11 +156,14 @@ class SocketThread(object):
         for sock in writable_sockets:
             deque = self.data_to_write[sock]
             while deque: # other threads never pop, so we don't need to lock
-                data = deque.popleft()
+                data, callback = deque.popleft()
                 bytes = _send_nonblock(sock, data)
                 if bytes != len(data):
-                    deque.appendleft(data[bytes:])
+                    deque.appendleft((data[bytes:], callback))
                     break
+                else:
+                    if callback:
+                        callback()
 
         for sock in readable_sockets:
             if sock in self.polled_accept_sockets:
@@ -175,10 +177,10 @@ class SocketThread(object):
                 else:
                     self.on_receive[sock](data)
 
-    def _write_async(self, socket, data):
+    def _write_async(self, socket, data, callback=None):
         with self.main_lock:
             assert len(data) != 0
-            self.data_to_write[socket].append(data)
+            self.data_to_write[socket].append((data, callback))
             self._interrupt_select()
 
     def _interrupt_select(self):
@@ -263,9 +265,9 @@ class Socket(object):
         self._next_channel_id = 1
         self._is_client = is_client
 
-    def _write_async(self, data):
+    def _write_async(self, data, callback=None):
         self.check_not_closed()
-        self._thread._write_async(self._socket, data)
+        self._thread._write_async(self._socket, data, callback)
 
     def _received(self, data):
         self._buffer_len += len(data)
@@ -359,9 +361,24 @@ class Channel(object):
     def _closed(self):
         self.recv.close()
 
-    def send_async(self, data):
+    def _send(self, data, callback=None):
         header = struct.pack(UINT32_STRUCT, len(data) + UINT32_SIZE) + struct.pack(UINT32_STRUCT, self.id)
-        self.socket._write_async(header + data)
+        self.socket._write_async(header + data, callback)
+        
+    def send_async(self, data):
+        self._send(data)
+        
+    def send(self, data):
+        cond = threading.Condition()
+
+        def notify():
+            with cond:
+                cond.notify()
+        
+        self._send(data, callback=notify)
+        
+        with cond:
+            cond.wait()
 
 RPC_REQUEST = 0x10000000
 RPC_RESPONSE = 0x20000000
