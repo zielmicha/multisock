@@ -58,6 +58,7 @@ import time
 import os
 import collections
 import struct
+import traceback
 import Queue as queue
 
 UINT32_SIZE = 4
@@ -70,6 +71,8 @@ MSB_SERVER = 0x20000000
 SYSTEM_MAIN = 1
 
 MAX_ID = 0xFFFFFFF
+
+DEBUG = 0
 
 class SocketThread(object):
     def __init__(self):
@@ -85,6 +88,8 @@ class SocketThread(object):
         self.data_to_write = collections.defaultdict(collections.deque)
         self.socket_objects = {}
         self.on_receive = {}
+        self.sockets_to_close = []
+        self._sockets_closed = threading.Condition()
         
         self._interrupt_pipe_r, self._interrupt_pipe_w = os.pipe()
         self._interrupted = False
@@ -108,18 +113,28 @@ class SocketThread(object):
             polled_read_sockets = list(self.polled_read_sockets)
             polled_accept_sockets = list(self.polled_accept_sockets)
             polled_write_sockets = [ key for key, val in self.data_to_write.items() if val ]
+            sockets_to_close = list(self.sockets_to_close)
+            self.sockets_to_close = []
             self._interrupted = False
         # if data to write is added after leaving this lock
         # interrupting code sees that select was not yet interrupted, so it writes to pipe
         # and select is exited immediately
+
+        for sock in sockets_to_close:
+            if DEBUG >= 1: print 'close', sock
+            sock.close()
+
+        with self._sockets_closed:
+            self._sockets_closed.notify_all()
         
         polled_read_sockets.append(self._interrupt_pipe_r)
 
-        #print 'select', polled_read_sockets + polled_accept_sockets, polled_write_sockets
+        if DEBUG >= 2: print 'select', polled_read_sockets + polled_accept_sockets, polled_write_sockets
         readable_sockets, writable_sockets, error_sockets = select.select(polled_read_sockets + polled_accept_sockets,
                                                                           polled_write_sockets,
                                                                           polled_read_sockets + polled_accept_sockets + polled_write_sockets)
-        #print '----->', readable_sockets, writable_sockets, error_sockets
+
+        if DEBUG >= 2: print '----->', readable_sockets, writable_sockets, error_sockets
         
         # even if select was not interrupted by writing to pipe, next select will use
         # new data (see first comment)
@@ -168,6 +183,13 @@ class SocketThread(object):
             os.write(self._interrupt_pipe_w, '1')
             self._interrupted = True
 
+    def _add_socket_to_close(self, sock):
+        ''' Need to be done _after_ socket is removed from poll list. '''
+        with self.main_lock:
+            if DEBUG >= 1: print 'will close', sock
+            self.sockets_to_close.append(sock)
+            self._interrupt_select()
+
     def _setup_socket(self, sock):
         sock.setblocking(False)
         
@@ -182,6 +204,13 @@ class SocketThread(object):
         addr = _parse_tcp_uri(uri)
         sock = socket.socket()
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        with self._sockets_closed:
+            with self.main_lock:
+                self._interrupt_select()
+            # wait until all closed sockets are closed - or bind may fail
+            self._sockets_closed.wait(timeout=5.0) # timeout added for these who forgot to start SocketThread
+
         sock.bind(addr)
         sock.listen(1)
 
@@ -209,7 +238,7 @@ class Acceptor(object):
         with self._thread.main_lock:
             del self._thread.socket_objects[self._socket]
             self._thread.polled_accept_sockets.remove(self._socket)
-        self._socket.close()
+        self._thread._add_socket_to_close(self._socket)
         
 class Socket(object):
     def __init__(self, thread, sock, is_client):
@@ -297,7 +326,6 @@ class Socket(object):
 
     def close(self):
         self.closed = True
-        self._socket.close()
         with self._thread.main_lock:
             self._thread.polled_read_sockets.remove(self._socket)
             del self._thread.socket_objects[self._socket]
@@ -305,6 +333,8 @@ class Socket(object):
                 del self._thread.data_to_write[self._socket]
             except KeyError:
                 pass
+
+        self._thread._add_socket_to_close(self._socket)
 
         for channel in self._channels.values():
             channel._closed()
@@ -397,7 +427,7 @@ class Operation(object):
             return val
 
     def close(self):
-        # FIXME: this doesn't work reliably when more than 10 threads is
+        # FIXME: this doesn't work reliably when more than 10 threads are
         # waiting on queue
         self._closed = True
         for i in xrange(10):
