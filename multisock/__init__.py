@@ -90,6 +90,8 @@ class SocketThread(object):
         self.on_receive = {}
         self.sockets_to_close = []
         self._sockets_closed = threading.Condition()
+
+        self.is_running = False
         
         self._interrupt_pipe_r, self._interrupt_pipe_w = os.pipe()
         self._interrupted = False
@@ -101,9 +103,11 @@ class SocketThread(object):
                 self._tick()
         finally:
             self.local.in_socket_thread = False
+            self.is_running = False
 
     def _setup(self):
         set_thread_name('multisockselect')
+        self.is_running = True
         self.local.in_socket_thread = True
         
     def _tick(self):
@@ -205,11 +209,12 @@ class SocketThread(object):
         sock = socket.socket()
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-        with self._sockets_closed:
-            with self.main_lock:
-                self._interrupt_select()
-            # wait until all closed sockets are closed - or bind may fail
-            self._sockets_closed.wait(timeout=5.0) # timeout added for these who forgot to start SocketThread
+        if self.is_running: # there may be a race condition, but it looks like it's really hard to accompilsh
+            with self._sockets_closed:
+                with self.main_lock:
+                    self._interrupt_select()
+                # wait until all closed sockets are closed - or bind may fail
+                self._sockets_closed.wait()
 
         sock.bind(addr)
         sock.listen(1)
