@@ -43,6 +43,9 @@ Client:
 import json
 import multisock
 import functools
+import logging
+
+exception_logger = logging.getLogger('jsonrpc_exception_logger')
 
 class JsonRpcChannel(object):
     def __init__(self, channel, async=False):
@@ -73,12 +76,13 @@ class JsonRpcChannel(object):
         try:
             method = getattr(self.server, 'rpc_' + name)
         except AttributeError:
-            return_error('AttributeError', 'No such method')
+            return_error('AttributeError', 'No such method %r' % name)
             return
 
         try:
             result = method(*call['args'], **call['kwargs'])
         except Exception as err:
+            exception_logger.debug('exception in called method', exc_info=True)
             return_error(err.__class__.__name__, err.message)
         else:
             return_(json.dumps({'result': result}))
@@ -98,7 +102,11 @@ class _Proxy(object):
         return functools.partial(self._channel.call_func, name)
     
 class RemoteError(Exception):
-    pass
+    def __str__(self):
+        if len(tuple(self)) == 2:
+            return '%s: %s' % tuple(self)
+        else:
+            return Exception.__str__(self)
 
         
     
