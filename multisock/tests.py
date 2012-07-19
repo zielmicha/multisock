@@ -31,6 +31,7 @@ import multisock
 import multisock.jsonrpc
 import socket
 import functools
+import time
 
 class Test(unittest.TestCase):
     def setUp(self):
@@ -188,6 +189,27 @@ class Test(unittest.TestCase):
         server.close()
         for i in xrange(20):
             self.assertRaises(multisock.SocketClosedError, client_ch.recv)
+
+    def test_late_bind(self):
+        addr = 'tcp:localhost:5908'
+        acceptor = self.thread.listen(addr)
+        acceptor.close()
+
+        acceptor = self.thread.listen(addr)
+        client = self.thread.connect(addr)
+        client.get_main_channel().send_async('hie hie hie')
+        server = acceptor.accept()
+        time.sleep(0.1)
+
+        class A:
+            def set(self, _): self.got_message = True
+
+        a = A()
+        a.got_message = False
+
+        server.get_main_channel().recv.bind(a.set)
+        time.sleep(0.1)
+        assert a.got_message, 'qsize: %d' % server.get_main_channel().recv._queue.qsize()
 
 if __name__ == '__main__':
     unittest.main()

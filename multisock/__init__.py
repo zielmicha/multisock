@@ -415,6 +415,13 @@ class Operation(object):
 
     def bind(self, func):
         self._callback = func
+        # now no one pushes anything to queue
+        while True:
+            try:
+                val = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            self._callback(val)
 
     def _check_closed(self):
         if self._closed:
