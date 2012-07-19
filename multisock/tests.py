@@ -137,6 +137,7 @@ class Test(unittest.TestCase):
             client_ch.rpc_send(msg).bind(functools.partial(check, msg))
 
         assert client_ch.rpc_send('hello')() == 'hello'
+        assert not client_ch._operations, 'Suspect memory leak'
 
     def _test_jsonrpc(self, async):
         addr = 'tcp:localhost:5906' if async else 'tcp:localhost:5905'

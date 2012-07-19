@@ -404,6 +404,7 @@ class RpcChannel(object):
         elif RPC_RESPONSE & flags_num:
             # TODO: signal error if num not in _operations
             self._operations[num].dispatch(data)
+            del self._operations[num]
         else:
             # TODO: signal error
             print 'Error: invalid flag'
