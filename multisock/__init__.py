@@ -1,18 +1,18 @@
 # Copyright (c) 2012, Michal Zielinski <michal@zielinscy.org.pl>
 # All rights reserved.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
 # met:
-# 
+#
 #     * Redistributions of source code must retain the above copyright
 #     notice, this list of conditions and the following disclaimer.
-# 
+#
 #     * Redistributions in binary form must reproduce the above
 #     copyright notice, this list of conditions and the following
 #     disclaimer in the documentation and/or other materials provided
 #     with the distribution.
-# 
+#
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
 # "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
 # LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
@@ -31,7 +31,7 @@ class Socket:
     get_main_channel() -> Channel
     get_channel(id -> int) -> Channel
     new_channel() -> Channel
-    
+
 class Channel:
     send(data -> str)
     send_op(data -> str) -> Operation
@@ -79,7 +79,7 @@ class SocketThread(object):
     def __init__(self):
         self.local = threading.local()
         self.local.in_socket_thread = False
-        
+
         self.main_lock = threading.Lock() # todo: split locks
 
         self.polled_read_sockets = []
@@ -91,7 +91,7 @@ class SocketThread(object):
         self._sockets_closed = threading.Condition()
 
         self.is_running = False
-        
+
         self._interrupt_pipe_r, self._interrupt_pipe_w = os.pipe()
         self._interrupted = False
 
@@ -108,7 +108,7 @@ class SocketThread(object):
         set_thread_name('multisockselect')
         self.is_running = True
         self.local.in_socket_thread = True
-        
+
     def _tick(self):
         # if data to write is added before entering this lock (or after end of select call)
         # data is not written to pipe, because sockets for selects are not yet choosen
@@ -129,7 +129,7 @@ class SocketThread(object):
 
         with self._sockets_closed:
             self._sockets_closed.notify_all()
-        
+
         polled_read_sockets.append(self._interrupt_pipe_r)
 
         if DEBUG >= 2: print 'select', polled_read_sockets + polled_accept_sockets, polled_write_sockets
@@ -138,18 +138,18 @@ class SocketThread(object):
                                                                           polled_read_sockets + polled_accept_sockets + polled_write_sockets)
 
         if DEBUG >= 2: print '----->', readable_sockets, writable_sockets, error_sockets
-        
+
         # even if select was not interrupted by writing to pipe, next select will use
         # new data (see first comment)
         with self.main_lock:
             self._interrupted = True
-            
+
         def _send_nonblock(sock, data):
             try:
                 return sock.send(data)
             except socket.error: # TODO: check EAGAIN
                 return 0
-        
+
         for sock in error_sockets:
             self.socket_objects[sock].close()
 
@@ -198,14 +198,14 @@ class SocketThread(object):
 
     def _setup_socket(self, sock):
         sock.setblocking(False)
-        
+
     def connect(self, uri):
         addr = _parse_tcp_uri(uri)
         sock = socket.socket()
         sock.connect(addr)
         self._setup_socket(sock)
         return Socket(self, sock, is_client=True)
-        
+
     def listen(self, uri):
         addr = _parse_tcp_uri(uri)
         sock = socket.socket()
@@ -246,7 +246,7 @@ class Acceptor(object):
             del self._thread.socket_objects[self._socket]
             self._thread.polled_accept_sockets.remove(self._socket)
         self._thread._add_socket_to_close(self._socket)
-        
+
 class Socket(object):
     def __init__(self, thread, sock, is_client):
         self.closed = False
@@ -275,7 +275,7 @@ class Socket(object):
             self._buffer_list[0] += data
         else:
             self._buffer_list.append(data)
-            
+
         while self._buffer_len > UINT32_SIZE:
             size, = struct.unpack(UINT32_STRUCT, self._buffer_list[0][:UINT32_SIZE])
             if self._buffer_len >= UINT32_SIZE + size:
@@ -319,7 +319,7 @@ class Socket(object):
 
     def get_main_channel(self):
         return self.get_channel(MSB_SYSTEM | SYSTEM_MAIN)
-    
+
     def new_channel(self):
         id = self._next_channel_id
         self._next_channel_id += 1
@@ -364,20 +364,19 @@ class Channel(object):
     def _send(self, data, callback=None):
         header = struct.pack(UINT32_STRUCT, len(data) + UINT32_SIZE) + struct.pack(UINT32_STRUCT, self.id)
         self.socket._write_async(header + data, callback)
-        
+
     def send_async(self, data):
         self._send(data)
-        
+
     def send(self, data):
         cond = threading.Condition()
 
         def notify():
             with cond:
                 cond.notify()
-        
-        self._send(data, callback=notify)
-        
+
         with cond:
+            self._send(data, callback=notify)
             cond.wait()
 
 RPC_REQUEST = 0x10000000
@@ -399,7 +398,7 @@ class RpcChannel(object):
         if RPC_REQUEST & flags_num:
             def func(data):
                 self._send(num | RPC_RESPONSE, data)
-            
+
             self.rpc_recv.dispatch((data, func))
         elif RPC_RESPONSE & flags_num:
             # TODO: signal error if num not in _operations
@@ -408,7 +407,7 @@ class RpcChannel(object):
         else:
             # TODO: signal error
             print 'Error: invalid flag'
-        
+
     def rpc_send(self, data):
         self._rpc_num += 1
         num = self._rpc_num
@@ -420,7 +419,7 @@ class RpcChannel(object):
     def _send(self, num, data):
         header = struct.pack(UINT32_STRUCT, num)
         self.channel.send_async(header + data)
-        
+
 class Operation(object):
     def __init__(self):
         self._callback = None
@@ -478,7 +477,7 @@ class Operation(object):
 
     class WouldBlock(Exception):
         pass
-    
+
 def _parse_tcp_uri(uri):
     if uri.startswith('tcp:'):
         host, port = uri[4:].rsplit(':')
@@ -512,12 +511,12 @@ try:
     import ctypes
 
     libc = ctypes.CDLL('libc.so.6')
-    
+
     def set_thread_name(name):
         name = name[:15] + '\0'
         libc.prctl(15, name, 0, 0, 0)
-    
+
 except (ImportError, OSError):
-    
+
     def set_thread_name(name):
         pass
