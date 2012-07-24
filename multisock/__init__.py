@@ -421,10 +421,10 @@ class RpcChannel(object):
         self.channel.send_async(header + data)
 
 class Operation(object):
-    def __init__(self):
+    def __init__(self, qsize=0):
         self._callback = None
         self._closed = False
-        self._queue = queue.Queue(0)
+        self._queue = queue.Queue(qsize)
         # value that is passed to queue when Operation is closed
         self._special_close_value = object()
 
@@ -459,8 +459,11 @@ class Operation(object):
         # FIXME: this doesn't work reliably when more than 10 threads are
         # waiting on queue
         self._closed = True
-        for i in xrange(10):
-            self._queue.put(self._special_close_value)
+        try:
+            for i in xrange(10):
+                self._queue.put_nowait(self._special_close_value)
+        except queue.Empty:
+            pass
 
     def __call__(self):
         assert not self._callback
