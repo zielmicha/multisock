@@ -462,7 +462,7 @@ class Operation(object):
         try:
             for i in xrange(10):
                 self._queue.put_nowait(self._special_close_value)
-        except queue.Empty:
+        except queue.Full:
             pass
 
     def __call__(self):
