@@ -250,6 +250,7 @@ class Acceptor(object):
 class Socket(object):
     def __init__(self, thread, sock, is_client):
         self.closed = False
+        self._lock = threading.Lock()
         self._thread = thread
         self._socket = sock
         with self._thread.main_lock:
@@ -312,17 +313,19 @@ class Socket(object):
         self.get_channel(channel)._received(data)
 
     def get_channel(self, id):
-        if id not in self._channels:
-            self._channels[id] = Channel(self, id)
+        with self._lock:
+            if id not in self._channels:
+                self._channels[id] = Channel(self, id)
 
-        return self._channels[id]
+            return self._channels[id]
 
     def get_main_channel(self):
         return self.get_channel(MSB_SYSTEM | SYSTEM_MAIN)
 
     def new_channel(self):
-        id = self._next_channel_id
-        self._next_channel_id += 1
+        with self._lock:
+            id = self._next_channel_id
+            self._next_channel_id += 1
         assert id < MAX_ID
         msb = MSB_CLIENT if self._is_client else MSB_SERVER
         return self.get_channel(msb | id)
